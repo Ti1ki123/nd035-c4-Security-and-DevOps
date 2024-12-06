@@ -12,47 +12,75 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
-import org.springframework.stereotype.Component;
 
 import com.auth0.jwt.JWT;
+import com.auth0.jwt.exceptions.JWTVerificationException;
 
 import static com.auth0.jwt.algorithms.Algorithm.HMAC512;
 
-@Component
-public class JWTAuthenticationVerficationFilter extends BasicAuthenticationFilter {
+public class JWTAuthenticationVerficationFilter  extends BasicAuthenticationFilter {
 
-    public JWTAuthenticationVerficationFilter(AuthenticationManager authManager) {
+    public JWTAuthenticationVerficationFilter (AuthenticationManager authManager) {
         super(authManager);
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
             throws IOException, ServletException {
+
         String header = req.getHeader(SecurityConstants.HEADER_STRING);
 
         if (header == null || !header.startsWith(SecurityConstants.TOKEN_PREFIX)) {
-            chain.doFilter(req, res);
-            return;
+            // Missing or invalid token
+            res.setStatus(HttpServletResponse.SC_UNAUTHORIZED); // 401
+            res.getWriter().write("Missing or invalid Authorization header.");
+            return; // Stop filter chain
         }
 
-        UsernamePasswordAuthenticationToken authentication = getAuthentication(req);
+        try {
+            // Authenticate the request
+            UsernamePasswordAuthenticationToken authentication = getAuthentication(req);
+            if (authentication == null) {
+                // Invalid token
+                res.setStatus(HttpServletResponse.SC_UNAUTHORIZED); // 401
+                res.getWriter().write("Invalid or expired token.");
+                return; // Stop filter chain
+            }
 
-        SecurityContextHolder.getContext().setAuthentication(authentication);
+            // Set authentication in the context if valid
+            SecurityContextHolder.getContext().setAuthentication(authentication);
+
+        } catch (JWTVerificationException e) {
+            // Token verification failed
+            res.setStatus(HttpServletResponse.SC_UNAUTHORIZED); // 401
+            res.getWriter().write("Invalid or expired token.");
+            return; // Stop filter chain
+        }
+
+        // Continue with the filter chain if the token is valid
         chain.doFilter(req, res);
     }
 
     private UsernamePasswordAuthenticationToken getAuthentication(HttpServletRequest req) {
         String token = req.getHeader(SecurityConstants.HEADER_STRING);
-        if (token != null) {
-            String user = JWT.require(HMAC512(SecurityConstants.SECRET.getBytes())).build()
-                    .verify(token.replace(SecurityConstants.TOKEN_PREFIX, ""))
-                    .getSubject();
-            if (user != null) {
-                return new UsernamePasswordAuthenticationToken(user, null, new ArrayList<>());
-            }
-            return null;
-        }
-        return null;
-    }
 
+        if (token != null) {
+            try {
+                // Parse and validate the JWT token
+                String user = JWT.require(HMAC512(SecurityConstants.SECRET.getBytes()))
+                        .build()
+                        .verify(token.replace(SecurityConstants.TOKEN_PREFIX, ""))
+                        .getSubject();
+
+                if (user != null) {
+                    // Return an authenticated token
+                    return new UsernamePasswordAuthenticationToken(user, null, new ArrayList<>());
+                }
+            } catch (JWTVerificationException e) {
+                // Token is invalid
+                throw e;
+            }
+        }
+        return null; // No valid user found
+    }
 }
